@@ -1,5 +1,5 @@
 /**
- * Camera Coverage Problem
+ * Camera Coverage Problem - Enhanced Version
  * 
  * This module solves the problem of determining whether a set of hardware cameras
  * can collectively cover all combinations of subject distances and light levels
@@ -16,6 +16,10 @@
  * 
  * Time Complexity: O(n² × m) where n = number of unique coordinates, m = number of cameras
  * Space Complexity: O(n²) for the grid
+ * 
+ * @module camera-coverage
+ * @version 2.0.0
+ * @author Darshak
  */
 
 // =============================================================================
@@ -23,17 +27,21 @@
 // =============================================================================
 
 /**
- * Represents a range with minimum and maximum values (inclusive)
+ * Represents a range with minimum and maximum values (inclusive).
+ * Both min and max must be finite numbers with min <= max.
  */
-interface Range {
+export interface Range {
+    /** Minimum value of the range (inclusive) */
     min: number;
+    /** Maximum value of the range (inclusive) */
     max: number;
 }
 
 /**
- * Represents the desired characteristics of the software camera
+ * Represents the desired characteristics of the software camera.
+ * Defines the 2D space that must be covered by hardware cameras.
  */
-interface SoftwareCameraSpec {
+export interface SoftwareCameraSpec {
     /** Range of subject distances the software camera should support */
     distanceRange: Range;
     /** Range of light levels the software camera should support */
@@ -41,9 +49,10 @@ interface SoftwareCameraSpec {
 }
 
 /**
- * Represents a hardware camera with its supported ranges
+ * Represents a hardware camera with its supported ranges.
+ * Each camera covers a rectangular region in the distance-light space.
  */
-interface HardwareCamera {
+export interface HardwareCamera {
     /** Unique identifier for the camera */
     id: string;
     /** Range of subject distances this camera supports */
@@ -53,26 +62,144 @@ interface HardwareCamera {
 }
 
 /**
- * Result of the coverage check
+ * Represents an uncovered region in the target space.
  */
-interface CoverageResult {
+export interface UncoveredRegion {
+    /** Distance range of the uncovered region */
+    distanceRange: Range;
+    /** Light level range of the uncovered region */
+    lightRange: Range;
+}
+
+/**
+ * Result of the coverage check with detailed information.
+ */
+export interface CoverageResult {
     /** Whether the hardware cameras fully cover the required range */
     isSufficient: boolean;
     /** Description of the result */
     message: string;
-    /** Uncovered regions if any (for debugging) */
-    uncoveredRegions?: Array<{
-        distanceRange: Range;
-        lightRange: Range;
-    }>;
+    /** Uncovered regions if any (for debugging and visualization) */
+    uncoveredRegions?: UncoveredRegion[];
+    /** Statistics about the coverage check */
+    statistics?: CoverageStatistics;
+}
+
+/**
+ * Statistics about the coverage analysis.
+ */
+export interface CoverageStatistics {
+    /** Number of hardware cameras analyzed */
+    totalCameras: number;
+    /** Number of unique distance boundaries */
+    distanceBoundaries: number;
+    /** Number of unique light boundaries */
+    lightBoundaries: number;
+    /** Total number of grid cells checked */
+    gridCellsChecked: number;
+    /** Number of uncovered cells found */
+    uncoveredCells: number;
+    /** Coverage percentage (0-100) */
+    coveragePercentage: number;
 }
 
 // =============================================================================
-// Core Algorithm
+// Validation Functions
 // =============================================================================
 
 /**
- * Checks if a hardware camera covers a specific point
+ * Validates a range object to ensure it meets all requirements.
+ * 
+ * @param range - The range to validate
+ * @param name - Name of the range for error messages
+ * @throws Error if the range is invalid
+ */
+function validateRange(range: Range, name: string): void {
+    if (!range) {
+        throw new Error(`${name} is null or undefined`);
+    }
+
+    if (typeof range.min !== 'number' || typeof range.max !== 'number') {
+        throw new Error(`${name} must have numeric min and max values`);
+    }
+
+    if (!Number.isFinite(range.min) || !Number.isFinite(range.max)) {
+        throw new Error(`${name} must have finite min and max values`);
+    }
+
+    if (range.min > range.max) {
+        throw new Error(`${name} has min (${range.min}) greater than max (${range.max})`);
+    }
+}
+
+/**
+ * Validates a software camera specification.
+ * 
+ * @param spec - The specification to validate
+ * @throws Error if the specification is invalid
+ */
+function validateSoftwareCameraSpec(spec: SoftwareCameraSpec): void {
+    if (!spec) {
+        throw new Error('Software camera specification is null or undefined');
+    }
+
+    validateRange(spec.distanceRange, 'Distance range');
+    validateRange(spec.lightRange, 'Light range');
+}
+
+/**
+ * Validates a hardware camera.
+ * 
+ * @param camera - The camera to validate
+ * @param index - Index of the camera in the array (for error messages)
+ * @throws Error if the camera is invalid
+ */
+function validateHardwareCamera(camera: HardwareCamera, index: number): void {
+    if (!camera) {
+        throw new Error(`Hardware camera at index ${index} is null or undefined`);
+    }
+
+    if (!camera.id || typeof camera.id !== 'string') {
+        throw new Error(`Hardware camera at index ${index} has invalid or missing id`);
+    }
+
+    validateRange(camera.distanceRange, `Camera "${camera.id}" distance range`);
+    validateRange(camera.lightRange, `Camera "${camera.id}" light range`);
+}
+
+/**
+ * Validates an array of hardware cameras.
+ * 
+ * @param cameras - The cameras to validate
+ * @throws Error if any camera is invalid or if there are duplicate IDs
+ */
+function validateHardwareCameras(cameras: HardwareCamera[]): void {
+    if (!Array.isArray(cameras)) {
+        throw new Error('Hardware cameras must be an array');
+    }
+
+    cameras.forEach((camera, index) => validateHardwareCamera(camera, index));
+
+    // Check for duplicate IDs
+    const ids = cameras.map(c => c.id);
+    const uniqueIds = new Set(ids);
+    if (ids.length !== uniqueIds.size) {
+        const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+        throw new Error(`Duplicate camera IDs found: ${duplicates.join(', ')}`);
+    }
+}
+
+// =============================================================================
+// Core Algorithm Functions
+// =============================================================================
+
+/**
+ * Checks if a hardware camera covers a specific point in 2D space.
+ * 
+ * @param camera - The hardware camera to check
+ * @param distance - The distance value to check
+ * @param lightLevel - The light level value to check
+ * @returns True if the camera covers the point, false otherwise
  */
 function cameraCoversPoint(
     camera: HardwareCamera,
@@ -88,7 +215,17 @@ function cameraCoversPoint(
 }
 
 /**
- * Checks if a hardware camera fully covers a rectangular region
+ * Checks if a hardware camera fully covers a rectangular region.
+ * 
+ * A camera covers a region if the region is completely contained within
+ * the camera's coverage area.
+ * 
+ * @param camera - The hardware camera to check
+ * @param distMin - Minimum distance of the region
+ * @param distMax - Maximum distance of the region
+ * @param lightMin - Minimum light level of the region
+ * @param lightMax - Maximum light level of the region
+ * @returns True if the camera fully covers the region, false otherwise
  */
 function cameraCoversRegion(
     camera: HardwareCamera,
@@ -106,7 +243,14 @@ function cameraCoversRegion(
 }
 
 /**
- * Checks if any camera from the list covers a rectangular region
+ * Checks if any camera from the list covers a rectangular region.
+ * 
+ * @param cameras - Array of hardware cameras to check
+ * @param distMin - Minimum distance of the region
+ * @param distMax - Maximum distance of the region
+ * @param lightMin - Minimum light level of the region
+ * @param lightMax - Maximum light level of the region
+ * @returns True if at least one camera covers the region, false otherwise
  */
 function anyCoversRegion(
     cameras: HardwareCamera[],
@@ -121,7 +265,15 @@ function anyCoversRegion(
 }
 
 /**
- * Collects all unique boundary values and sorts them
+ * Collects all unique boundary values from the target range and camera ranges,
+ * then sorts them in ascending order.
+ * 
+ * This implements coordinate compression, reducing the continuous 2D space
+ * into a discrete grid of cells.
+ * 
+ * @param target - The target range to cover
+ * @param cameraRanges - Array of camera ranges
+ * @returns Sorted array of unique boundary values
  */
 function collectBoundaries(
     target: Range,
@@ -129,12 +281,13 @@ function collectBoundaries(
 ): number[] {
     const boundaries = new Set<number>();
 
-    // Add target boundaries
+    // Add target boundaries (always included)
     boundaries.add(target.min);
     boundaries.add(target.max);
 
     // Add camera boundaries that fall within or at the target range
     for (const range of cameraRanges) {
+        // Include boundaries that are within the target range
         if (range.min >= target.min && range.min <= target.max) {
             boundaries.add(range.min);
         }
@@ -143,21 +296,101 @@ function collectBoundaries(
         }
     }
 
+    // Convert to array and sort numerically
     return Array.from(boundaries).sort((a, b) => a - b);
 }
 
 /**
- * Main function: Tests whether a set of hardware cameras can fully cover
- * the desired characteristics of a software camera.
+ * Calculates coverage statistics for the analysis.
+ * 
+ * @param totalCameras - Number of cameras analyzed
+ * @param distBoundaries - Number of distance boundaries
+ * @param lightBoundaries - Number of light boundaries
+ * @param uncoveredCells - Number of uncovered cells
+ * @returns Coverage statistics object
+ */
+function calculateStatistics(
+    totalCameras: number,
+    distBoundaries: number,
+    lightBoundaries: number,
+    uncoveredCells: number
+): CoverageStatistics {
+    const totalCells = Math.max(0, (distBoundaries - 1) * (lightBoundaries - 1));
+    const coveredCells = totalCells - uncoveredCells;
+    const coveragePercentage = totalCells > 0
+        ? Math.round((coveredCells / totalCells) * 100)
+        : 0;
+
+    return {
+        totalCameras,
+        distanceBoundaries: distBoundaries,
+        lightBoundaries: lightBoundaries,
+        gridCellsChecked: totalCells,
+        uncoveredCells,
+        coveragePercentage
+    };
+}
+
+// =============================================================================
+// Main Coverage Check Function
+// =============================================================================
+
+/**
+ * Tests whether a set of hardware cameras can fully cover the desired
+ * characteristics of a software camera.
+ * 
+ * This function implements a sweep-line algorithm with coordinate compression
+ * to efficiently check coverage across a 2D space.
  * 
  * @param softwareSpec - The desired range of distances and light levels
  * @param hardwareCameras - List of available hardware cameras
  * @returns CoverageResult indicating whether coverage is sufficient
+ * @throws Error if inputs are invalid
+ * 
+ * @example
+ * ```typescript
+ * const result = checkCameraCoverage(
+ *   {
+ *     distanceRange: { min: 1, max: 20 },
+ *     lightRange: { min: 100, max: 1000 }
+ *   },
+ *   [
+ *     {
+ *       id: 'cam1',
+ *       distanceRange: { min: 0, max: 10 },
+ *       lightRange: { min: 0, max: 2000 }
+ *     },
+ *     {
+ *       id: 'cam2',
+ *       distanceRange: { min: 10, max: 30 },
+ *       lightRange: { min: 0, max: 2000 }
+ *     }
+ *   ]
+ * );
+ * 
+ * console.log(result.isSufficient); // true
+ * console.log(result.statistics.coveragePercentage); // 100
+ * ```
  */
-function checkCameraCoverage(
+export function checkCameraCoverage(
     softwareSpec: SoftwareCameraSpec,
     hardwareCameras: HardwareCamera[]
 ): CoverageResult {
+    // Validate inputs
+    try {
+        validateSoftwareCameraSpec(softwareSpec);
+        validateHardwareCameras(hardwareCameras);
+    } catch (error) {
+        return {
+            isSufficient: false,
+            message: `Validation error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            uncoveredRegions: [{
+                distanceRange: softwareSpec.distanceRange,
+                lightRange: softwareSpec.lightRange
+            }]
+        };
+    }
+
     // Edge case: no hardware cameras provided
     if (hardwareCameras.length === 0) {
         return {
@@ -166,16 +399,8 @@ function checkCameraCoverage(
             uncoveredRegions: [{
                 distanceRange: softwareSpec.distanceRange,
                 lightRange: softwareSpec.lightRange
-            }]
-        };
-    }
-
-    // Validate ranges
-    if (softwareSpec.distanceRange.min > softwareSpec.distanceRange.max ||
-        softwareSpec.lightRange.min > softwareSpec.lightRange.max) {
-        return {
-            isSufficient: false,
-            message: 'Invalid software camera specification: min > max'
+            }],
+            statistics: calculateStatistics(0, 2, 2, 1)
         };
     }
 
@@ -191,7 +416,7 @@ function checkCameraCoverage(
     );
 
     // Track uncovered regions
-    const uncoveredRegions: Array<{ distanceRange: Range; lightRange: Range }> = [];
+    const uncoveredRegions: UncoveredRegion[] = [];
 
     // Check each cell in the grid
     for (let i = 0; i < distanceBoundaries.length - 1; i++) {
@@ -202,11 +427,14 @@ function checkCameraCoverage(
             const lightMax = lightBoundaries[j + 1];
 
             // Check if this cell is within the target range
-            if (distMin >= softwareSpec.distanceRange.min &&
+            const isWithinTarget = (
+                distMin >= softwareSpec.distanceRange.min &&
                 distMax <= softwareSpec.distanceRange.max &&
                 lightMin >= softwareSpec.lightRange.min &&
-                lightMax <= softwareSpec.lightRange.max) {
+                lightMax <= softwareSpec.lightRange.max
+            );
 
+            if (isWithinTarget) {
                 // Check if any camera covers this cell
                 if (!anyCoversRegion(hardwareCameras, distMin, distMax, lightMin, lightMax)) {
                     uncoveredRegions.push({
@@ -218,216 +446,273 @@ function checkCameraCoverage(
         }
     }
 
+    // Calculate statistics
+    const statistics = calculateStatistics(
+        hardwareCameras.length,
+        distanceBoundaries.length,
+        lightBoundaries.length,
+        uncoveredRegions.length
+    );
+
+    // Return result
     if (uncoveredRegions.length === 0) {
         return {
             isSufficient: true,
-            message: `Coverage is complete. ${hardwareCameras.length} hardware camera(s) fully cover the required range.`
+            message: `Coverage is complete. ${hardwareCameras.length} hardware camera(s) fully cover the required range.`,
+            statistics
         };
     } else {
         return {
             isSufficient: false,
-            message: `Coverage is incomplete. ${uncoveredRegions.length} region(s) remain uncovered.`,
-            uncoveredRegions
+            message: `Coverage is incomplete. ${uncoveredRegions.length} region(s) remain uncovered (${statistics.coveragePercentage}% covered).`,
+            uncoveredRegions,
+            statistics
         };
     }
 }
 
 // =============================================================================
-// Test Cases
+// Utility Functions
 // =============================================================================
 
-function runTests(): void {
+/**
+ * Formats a range as a string for display.
+ * 
+ * @param range - The range to format
+ * @returns Formatted string representation
+ */
+export function formatRange(range: Range): string {
+    return `[${range.min}, ${range.max}]`;
+}
+
+/**
+ * Calculates the area of a range (max - min).
+ * 
+ * @param range - The range to calculate area for
+ * @returns The area of the range
+ */
+export function rangeArea(range: Range): number {
+    return range.max - range.min;
+}
+
+/**
+ * Calculates the 2D area of a region.
+ * 
+ * @param distanceRange - Distance range of the region
+ * @param lightRange - Light range of the region
+ * @returns The 2D area
+ */
+export function regionArea(distanceRange: Range, lightRange: Range): number {
+    return rangeArea(distanceRange) * rangeArea(lightRange);
+}
+
+/**
+ * Checks if two ranges overlap.
+ * 
+ * @param range1 - First range
+ * @param range2 - Second range
+ * @returns True if ranges overlap, false otherwise
+ */
+export function rangesOverlap(range1: Range, range2: Range): boolean {
+    return range1.min <= range2.max && range2.min <= range1.max;
+}
+
+// =============================================================================
+// Test Runner
+// =============================================================================
+
+/**
+ * Runs comprehensive test cases for the camera coverage algorithm.
+ * Outputs results to console with detailed formatting.
+ */
+export function runTests(): void {
     console.log('='.repeat(70));
     console.log('Camera Coverage Algorithm - Test Suite');
     console.log('='.repeat(70));
 
-    // Test 1: Single camera that fully covers the requirement
-    console.log('\n📷 Test 1: Single camera covers entire range');
-    const test1 = checkCameraCoverage(
+    const tests = [
         {
-            distanceRange: { min: 1, max: 10 },
-            lightRange: { min: 100, max: 1000 }
+            name: 'Single camera covers entire range',
+            spec: {
+                distanceRange: { min: 1, max: 10 },
+                lightRange: { min: 100, max: 1000 }
+            },
+            cameras: [
+                {
+                    id: 'camera-1',
+                    distanceRange: { min: 0, max: 15 },
+                    lightRange: { min: 50, max: 1500 }
+                }
+            ],
+            expectedSuccess: true
         },
-        [
-            {
-                id: 'camera-1',
-                distanceRange: { min: 0, max: 15 },
-                lightRange: { min: 50, max: 1500 }
-            }
-        ]
-    );
-    console.log(`Result: ${test1.isSufficient ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`Message: ${test1.message}`);
+        {
+            name: 'Two cameras together cover the range',
+            spec: {
+                distanceRange: { min: 1, max: 20 },
+                lightRange: { min: 100, max: 1000 }
+            },
+            cameras: [
+                {
+                    id: 'close-range',
+                    distanceRange: { min: 0, max: 10 },
+                    lightRange: { min: 0, max: 2000 }
+                },
+                {
+                    id: 'far-range',
+                    distanceRange: { min: 10, max: 30 },
+                    lightRange: { min: 0, max: 2000 }
+                }
+            ],
+            expectedSuccess: true
+        },
+        {
+            name: 'Gap in distance coverage (should fail)',
+            spec: {
+                distanceRange: { min: 1, max: 20 },
+                lightRange: { min: 100, max: 1000 }
+            },
+            cameras: [
+                {
+                    id: 'close-range',
+                    distanceRange: { min: 0, max: 8 },
+                    lightRange: { min: 0, max: 2000 }
+                },
+                {
+                    id: 'far-range',
+                    distanceRange: { min: 12, max: 30 },
+                    lightRange: { min: 0, max: 2000 }
+                }
+            ],
+            expectedSuccess: false
+        },
+        {
+            name: 'Gap in light level coverage (should fail)',
+            spec: {
+                distanceRange: { min: 1, max: 10 },
+                lightRange: { min: 100, max: 1000 }
+            },
+            cameras: [
+                {
+                    id: 'bright-light',
+                    distanceRange: { min: 0, max: 15 },
+                    lightRange: { min: 500, max: 2000 }
+                },
+                {
+                    id: 'dim-light',
+                    distanceRange: { min: 0, max: 15 },
+                    lightRange: { min: 0, max: 300 }
+                }
+            ],
+            expectedSuccess: false
+        },
+        {
+            name: 'Four cameras covering quadrants',
+            spec: {
+                distanceRange: { min: 0, max: 100 },
+                lightRange: { min: 0, max: 100 }
+            },
+            cameras: [
+                {
+                    id: 'q1',
+                    distanceRange: { min: 0, max: 50 },
+                    lightRange: { min: 50, max: 100 }
+                },
+                {
+                    id: 'q2',
+                    distanceRange: { min: 50, max: 100 },
+                    lightRange: { min: 50, max: 100 }
+                },
+                {
+                    id: 'q3',
+                    distanceRange: { min: 0, max: 50 },
+                    lightRange: { min: 0, max: 50 }
+                },
+                {
+                    id: 'q4',
+                    distanceRange: { min: 50, max: 100 },
+                    lightRange: { min: 0, max: 50 }
+                }
+            ],
+            expectedSuccess: true
+        },
+        {
+            name: 'No cameras provided (should fail)',
+            spec: {
+                distanceRange: { min: 1, max: 10 },
+                lightRange: { min: 100, max: 1000 }
+            },
+            cameras: [],
+            expectedSuccess: false
+        },
+        {
+            name: 'Three overlapping cameras with full coverage',
+            spec: {
+                distanceRange: { min: 5, max: 15 },
+                lightRange: { min: 200, max: 800 }
+            },
+            cameras: [
+                {
+                    id: 'cam-a',
+                    distanceRange: { min: 0, max: 12 },
+                    lightRange: { min: 100, max: 600 }
+                },
+                {
+                    id: 'cam-b',
+                    distanceRange: { min: 8, max: 20 },
+                    lightRange: { min: 100, max: 600 }
+                },
+                {
+                    id: 'cam-c',
+                    distanceRange: { min: 3, max: 18 },
+                    lightRange: { min: 500, max: 1000 }
+                }
+            ],
+            expectedSuccess: true
+        }
+    ];
 
-    // Test 2: Two cameras that together cover the requirement
-    console.log('\n📷 Test 2: Two cameras together cover the range');
-    const test2 = checkCameraCoverage(
-        {
-            distanceRange: { min: 1, max: 20 },
-            lightRange: { min: 100, max: 1000 }
-        },
-        [
-            {
-                id: 'close-range',
-                distanceRange: { min: 0, max: 10 },
-                lightRange: { min: 0, max: 2000 }
-            },
-            {
-                id: 'far-range',
-                distanceRange: { min: 10, max: 30 },
-                lightRange: { min: 0, max: 2000 }
-            }
-        ]
-    );
-    console.log(`Result: ${test2.isSufficient ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`Message: ${test2.message}`);
+    let passed = 0;
+    let failed = 0;
 
-    // Test 3: Gap in distance coverage
-    console.log('\n📷 Test 3: Gap in distance coverage (should fail)');
-    const test3 = checkCameraCoverage(
-        {
-            distanceRange: { min: 1, max: 20 },
-            lightRange: { min: 100, max: 1000 }
-        },
-        [
-            {
-                id: 'close-range',
-                distanceRange: { min: 0, max: 8 },
-                lightRange: { min: 0, max: 2000 }
-            },
-            {
-                id: 'far-range',
-                distanceRange: { min: 12, max: 30 },
-                lightRange: { min: 0, max: 2000 }
-            }
-        ]
-    );
-    console.log(`Result: ${test3.isSufficient ? '❌ FAIL' : '✅ PASS (correctly identified gap)'}`);
-    console.log(`Message: ${test3.message}`);
-    if (test3.uncoveredRegions) {
-        console.log('Uncovered regions:');
-        test3.uncoveredRegions.forEach((region, idx) => {
-            console.log(`  ${idx + 1}. Distance: [${region.distanceRange.min}, ${region.distanceRange.max}], ` +
-                `Light: [${region.lightRange.min}, ${region.lightRange.max}]`);
-        });
-    }
+    tests.forEach((test, index) => {
+        console.log(`\n📷 Test ${index + 1}: ${test.name}`);
+        const result = checkCameraCoverage(test.spec, test.cameras);
 
-    // Test 4: Gap in light level coverage
-    console.log('\n📷 Test 4: Gap in light level coverage (should fail)');
-    const test4 = checkCameraCoverage(
-        {
-            distanceRange: { min: 1, max: 10 },
-            lightRange: { min: 100, max: 1000 }
-        },
-        [
-            {
-                id: 'bright-light',
-                distanceRange: { min: 0, max: 15 },
-                lightRange: { min: 500, max: 2000 }
-            },
-            {
-                id: 'dim-light',
-                distanceRange: { min: 0, max: 15 },
-                lightRange: { min: 0, max: 300 }
-            }
-        ]
-    );
-    console.log(`Result: ${test4.isSufficient ? '❌ FAIL' : '✅ PASS (correctly identified gap)'}`);
-    console.log(`Message: ${test4.message}`);
-    if (test4.uncoveredRegions) {
-        console.log('Uncovered regions:');
-        test4.uncoveredRegions.forEach((region, idx) => {
-            console.log(`  ${idx + 1}. Distance: [${region.distanceRange.min}, ${region.distanceRange.max}], ` +
-                `Light: [${region.lightRange.min}, ${region.lightRange.max}]`);
-        });
-    }
+        const success = result.isSufficient === test.expectedSuccess;
+        if (success) {
+            passed++;
+            console.log(`Result: ✅ PASS`);
+        } else {
+            failed++;
+            console.log(`Result: ❌ FAIL`);
+        }
 
-    // Test 5: Four cameras covering quadrants
-    console.log('\n📷 Test 5: Four cameras covering all quadrants');
-    const test5 = checkCameraCoverage(
-        {
-            distanceRange: { min: 0, max: 100 },
-            lightRange: { min: 0, max: 100 }
-        },
-        [
-            {
-                id: 'q1',
-                distanceRange: { min: 0, max: 50 },
-                lightRange: { min: 50, max: 100 }
-            },
-            {
-                id: 'q2',
-                distanceRange: { min: 50, max: 100 },
-                lightRange: { min: 50, max: 100 }
-            },
-            {
-                id: 'q3',
-                distanceRange: { min: 0, max: 50 },
-                lightRange: { min: 0, max: 50 }
-            },
-            {
-                id: 'q4',
-                distanceRange: { min: 50, max: 100 },
-                lightRange: { min: 0, max: 50 }
-            }
-        ]
-    );
-    console.log(`Result: ${test5.isSufficient ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`Message: ${test5.message}`);
+        console.log(`Message: ${result.message}`);
 
-    // Test 6: No cameras provided
-    console.log('\n📷 Test 6: No cameras provided (should fail)');
-    const test6 = checkCameraCoverage(
-        {
-            distanceRange: { min: 1, max: 10 },
-            lightRange: { min: 100, max: 1000 }
-        },
-        []
-    );
-    console.log(`Result: ${test6.isSufficient ? '❌ FAIL' : '✅ PASS (correctly identified no cameras)'}`);
-    console.log(`Message: ${test6.message}`);
+        if (result.statistics) {
+            console.log(`Statistics: ${result.statistics.coveragePercentage}% coverage, ` +
+                `${result.statistics.gridCellsChecked} cells checked`);
+        }
 
-    // Test 7: Overlapping cameras with full coverage
-    console.log('\n📷 Test 7: Three overlapping cameras with full coverage');
-    const test7 = checkCameraCoverage(
-        {
-            distanceRange: { min: 5, max: 15 },
-            lightRange: { min: 200, max: 800 }
-        },
-        [
-            {
-                id: 'cam-a',
-                distanceRange: { min: 0, max: 12 },
-                lightRange: { min: 100, max: 600 }
-            },
-            {
-                id: 'cam-b',
-                distanceRange: { min: 8, max: 20 },
-                lightRange: { min: 100, max: 600 }
-            },
-            {
-                id: 'cam-c',
-                distanceRange: { min: 3, max: 18 },
-                lightRange: { min: 500, max: 1000 }
+        if (result.uncoveredRegions && result.uncoveredRegions.length > 0) {
+            console.log(`Uncovered regions: ${result.uncoveredRegions.length}`);
+            result.uncoveredRegions.slice(0, 3).forEach((region, idx) => {
+                console.log(`  ${idx + 1}. Distance: ${formatRange(region.distanceRange)}, ` +
+                    `Light: ${formatRange(region.lightRange)}`);
+            });
+            if (result.uncoveredRegions.length > 3) {
+                console.log(`  ... and ${result.uncoveredRegions.length - 3} more`);
             }
-        ]
-    );
-    console.log(`Result: ${test7.isSufficient ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`Message: ${test7.message}`);
+        }
+    });
 
     console.log('\n' + '='.repeat(70));
-    console.log('Test Suite Complete');
+    console.log(`Test Suite Complete: ${passed} passed, ${failed} failed`);
     console.log('='.repeat(70));
 }
 
-// Run tests
-runTests();
-
-// Export for use in other modules
-export {
-    checkCameraCoverage,
-    SoftwareCameraSpec,
-    HardwareCamera,
-    CoverageResult,
-    Range
-};
+// Run tests if this file is executed directly
+if (typeof require !== 'undefined' && require.main === module) {
+    runTests();
+}
